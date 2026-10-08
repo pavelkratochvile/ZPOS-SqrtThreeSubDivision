@@ -1,0 +1,10 @@
+# Všechny textové soubory sjednotit na LF
+* text=auto eol=lf
+*.cs text diff=csharp
+*.cginc text
+*.shader text
+*.mat text
+*.unity text
+*.prefab text
+*.asset text
+*.meta text
