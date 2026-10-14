@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using UnityEngine.Rendering;
 using Unity.VisualScripting;
 
+
 public class FaceVertexIndices
 {
     int id0;
@@ -89,7 +90,7 @@ public class HalfEdgeMesh
             int baseTriangleIndex = t;
             int baseEdgeIndex = 3 * t;
 
-            this.faces.Add(new HalfEdgeFace(baseTriangleIndex));
+            this.faces.Add(new HalfEdgeFace(baseEdgeIndex));
             this.edges.Add(new HalfEdgeEdge(id0, baseTriangleIndex, baseEdgeIndex + 1, -1, true));
             this.edges.Add(new HalfEdgeEdge(id1, baseTriangleIndex, baseEdgeIndex + 2, -1, true)); 
             this.edges.Add(new HalfEdgeEdge(id2, baseTriangleIndex, baseEdgeIndex + 0, -1, true));
@@ -197,4 +198,103 @@ public class HalfEdgeMesh
         string neighborStr = string.Join(", ", neighbors);
         Debug.Log($"Neighbors of vertex {vertexIndex}: {neighborStr}");
     }
+
+    public Vector3[] getVertices()
+    {
+        Vector3[] v = new Vector3[this.vertices.Count];
+
+        for(int i = 0; i < this.vertices.Count; i++)
+        {
+            v[i] = this.vertices[i].position;
+        }
+
+        return v;
+    }
+
+    public int[] getIndices()
+    {
+        int[] ind = new int[this.faces.Count * 3];
+
+        for(int i = 0; i < this.faces.Count; i++)
+        {
+            HalfEdgeEdge h0 = this.edges[this.faces[i].edgeIndex];
+            HalfEdgeEdge h1 = this.edges[h0.nextEdgeIndex];
+            HalfEdgeEdge h2 = this.edges[h1.nextEdgeIndex];
+
+            ind[i * 3 + 0] = h0.fromVertexIndex;
+            ind[i * 3 + 1] = h1.fromVertexIndex;
+            ind[i * 3 + 2] = h2.fromVertexIndex;
+        }
+        
+        return ind;
+    }
+
+    private void split()
+    {
+        int originalFaceCount = this.faces.Count;
+
+        for(int i = 0; i < originalFaceCount; i++)
+        {
+            HalfEdgeEdge h0 = this.edges[this.faces[i].edgeIndex];
+            HalfEdgeEdge h1 = this.edges[h0.nextEdgeIndex];
+            HalfEdgeEdge h2 = this.edges[h1.nextEdgeIndex];
+
+            Vector3 vSum = this.vertices[h0.fromVertexIndex].position + this.vertices[h1.fromVertexIndex].position + this.vertices[h2.fromVertexIndex].position;
+            Vector3 vNew = vSum / 3;
+
+            int h00i = this.faces[i].edgeIndex;
+            int h10i = h0.nextEdgeIndex;
+            int h20i = h1.nextEdgeIndex;
+            int h01i = this.edges.Count + 0;
+            int h12i = this.edges.Count + 1;
+            int h11i = this.edges.Count + 2;
+            int h22i = this.edges.Count + 3;
+            int h21i = this.edges.Count + 4;
+            int h02i = this.edges.Count + 5;
+
+            int t0 = i;
+            int t1 = this.faces.Count + 0;
+            int t2 = this.faces.Count + 1;
+
+            int p0 = h0.fromVertexIndex;
+            int p1 = h1.fromVertexIndex;
+            int p2 = h2.fromVertexIndex;
+
+            this.vertices.Add(new HalfEdgeVertex(vNew, h02i, false));
+            int newVertexIndex = this.vertices.Count - 1;
+
+            //pridani h01
+            this.edges.Add(new HalfEdgeEdge(p1,t0,h02i,h12i,false));
+            //pridani h12
+            this.edges.Add(new HalfEdgeEdge(newVertexIndex,t1,h10i,h01i,false));
+            //pridani h11
+            this.edges.Add(new HalfEdgeEdge(p2,t1,h12i,h22i,false));
+            //pridani h22
+            this.edges.Add(new HalfEdgeEdge(newVertexIndex,t2,h20i,h11i,false));
+            //pridani h21
+            this.edges.Add(new HalfEdgeEdge(p0,t2,h22i,h02i,false));
+            //pridani h02
+            this.edges.Add(new HalfEdgeEdge(newVertexIndex,t0,h00i,h21i,false));
+
+            h0.nextEdgeIndex = h01i;
+            this.edges[h00i] = h0;
+
+            h1.nextEdgeIndex = h11i;
+            h1.faceIndex = t1;
+            this.edges[h10i] = h1;
+
+            h2.nextEdgeIndex = h21i;
+            h2.faceIndex = t2;
+            this.edges[h20i] = h2;
+
+            this.faces.Add(new HalfEdgeFace(h10i));
+            this.faces.Add(new HalfEdgeFace(h20i));
+        }
+    }
+
+    public void subDivide()
+    {
+        this.split();
+    }
+
 }

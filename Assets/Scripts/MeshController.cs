@@ -27,16 +27,15 @@ public class MeshController : MonoBehaviour
 
         // 3. Inicializace Half-Edge s opravenými (svařenými) daty
         halfEdgeMesh = new HalfEdgeMesh(weldedVertices, weldedIndices);
+
+        Debug.Log(halfEdgeMesh.getVertices().Length);
         
-        halfEdgeMesh.writeInfo();
-        halfEdgeMesh.printVerNeiborhood(20);
-        halfEdgeMesh.printVerNeiborhood(30);
-        halfEdgeMesh.printVerNeiborhood(40);
     }
 
     private void SubdivideMesh()
     {
-        Debug.Log("Subdivide button clicked");
+        this.halfEdgeMesh.subDivide();
+        Debug.Log(halfEdgeMesh.getVertices().Length);
     }
 
     // Pomocná metoda pro sloučení rozpojených vrcholů
