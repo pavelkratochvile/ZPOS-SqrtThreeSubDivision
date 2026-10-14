@@ -36,6 +36,41 @@ public class MeshController : MonoBehaviour
     {
         this.halfEdgeMesh.subDivide();
         Debug.Log(halfEdgeMesh.getVertices().Length);
+        UnWeldMesh();
+    }
+
+    private void UnWeldMesh()
+    {
+        Vector3[] weldedVertices = halfEdgeMesh.getVertices();
+        int[] weldedIndices = halfEdgeMesh.getIndices();
+
+        // Počet nových vrcholů odpovídá přesně počtu indexů (každý trojúhelník má 3 unikátní vrcholy)
+        Vector3[] flatVertices = new Vector3[weldedIndices.Length];
+        int[] flatIndices = new int[weldedIndices.Length];
+
+        for (int i = 0; i < weldedIndices.Length; i++)
+        {
+            flatVertices[i] = weldedVertices[weldedIndices[i]];
+            flatIndices[i] = i; // Indexy jdou lineárně za sebou: 0, 1, 2, 3, 4, 5...
+        }
+
+        Mesh mesh = new Mesh();
+
+        // Pojistka: pokud má model po subdivizi více než 65 535 vrcholů,
+        // musíme Unity říct, aby použilo 32bitové indexy, jinak by mesh spadl.
+        if (flatVertices.Length > 65535)
+        {
+            mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        }
+
+        mesh.vertices = flatVertices;
+        mesh.triangles = flatIndices;
+
+        // Přepočítá kolmé normály zvlášť pro každou plošku (vytvoří ostré hrany)
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+
+        this.meshFilter.mesh = mesh;
     }
 
     // Pomocná metoda pro sloučení rozpojených vrcholů

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.Rendering;
 using Unity.VisualScripting;
+using System;
 
 
 public class FaceVertexIndices
@@ -292,9 +293,39 @@ public class HalfEdgeMesh
         }
     }
 
+    private void smooth()
+    {
+        List<int> neibs = new List<int>();
+        
+        for(int i = 0; i < this.vertices.Count; i++)
+        {
+            if(this.vertices[i].isOriginal == false)
+            {
+                continue;
+            }
+            
+            neibs = this.VVQuery(i);
+            Vector3 sum = new Vector3();
+
+            for(int j = 0; j < neibs.Count; j++)
+            {
+                sum += this.vertices[neibs[j]].position;
+            }
+
+            int n = neibs.Count;
+            float alpha = (4 - 2 * Mathf.Cos((2 * Mathf.PI)/n)) / 9;
+            Vector3 newP = (1 - alpha) * this.vertices[i].position + alpha/n * sum;
+            
+            HalfEdgeVertex v = this.vertices[i];
+            v.position = newP;
+            this.vertices[i] = v;
+        }
+    }
+
     public void subDivide()
     {
         this.split();
+        this.smooth();
     }
 
 }
