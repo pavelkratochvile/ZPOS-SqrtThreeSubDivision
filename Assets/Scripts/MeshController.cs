@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using System.Collections.Generic;
 
@@ -6,8 +7,46 @@ public class MeshController : MonoBehaviour
 {
     [SerializeField] private MeshFilter meshFilter;
     [SerializeField] private Button subDivideButton;
+    [SerializeField] private float rotationSpeed = 90f;
 
     private HalfEdgeMesh halfEdgeMesh;
+
+    private void Update()
+    {
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null)
+        {
+            return;
+        }
+
+        float horizontalInput = 0f;
+        if (keyboard.leftArrowKey.isPressed)
+        {
+            horizontalInput -= 1f;
+        }
+        if (keyboard.rightArrowKey.isPressed)
+        {
+            horizontalInput += 1f;
+        }
+
+        float verticalInput = 0f;
+        if (keyboard.downArrowKey.isPressed)
+        {
+            verticalInput -= 1f;
+        }
+        if (keyboard.upArrowKey.isPressed)
+        {
+            verticalInput += 1f;
+        }
+
+        Vector3 rotation = new Vector3(
+            -verticalInput,
+            horizontalInput,
+            0f
+        );
+
+        transform.Rotate(rotation * rotationSpeed * Time.deltaTime, Space.Self);
+    }
     
     void Start()
     {
@@ -36,10 +75,28 @@ public class MeshController : MonoBehaviour
     {
         this.halfEdgeMesh.subDivide();
         Debug.Log(halfEdgeMesh.getVertices().Length);
-        UnWeldMesh();
+        UnWeldMeshFlat();
     }
 
-    private void UnWeldMesh()
+    private void UnWeldMeshSmooth()
+    {
+        Mesh mesh = new Mesh();
+
+        // Odemkneme podporu pro více než 65 535 vrcholů:
+        if (halfEdgeMesh.vertices.Count > 65535)
+        {
+            mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        }
+
+        mesh.vertices = halfEdgeMesh.getVertices();
+        mesh.triangles = halfEdgeMesh.getIndices();
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+
+        this.meshFilter.mesh = mesh;
+    }
+
+    private void UnWeldMeshFlat()
     {
         Vector3[] weldedVertices = halfEdgeMesh.getVertices();
         int[] weldedIndices = halfEdgeMesh.getIndices();

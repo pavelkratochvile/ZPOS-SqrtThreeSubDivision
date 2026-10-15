@@ -129,6 +129,21 @@ public class HalfEdgeMesh
                 this.edges[twinEdgeIndex] = heTwin;
             }
         }
+
+        // Přidat na úplný konec konstruktoru HalfEdgeMesh:
+        for (int i = 0; i < this.edges.Count; i++)
+        {
+            // Pokud hrana leží na okraji díry (nemá souseda)
+            if (this.edges[i].twinEdgeIndex == -1)
+            {
+                int vIdx = this.edges[i].fromVertexIndex;
+                HalfEdgeVertex v = this.vertices[vIdx];
+
+                // Vynutíme, aby vrchol začínal obíhání z hrany na okraji!
+                v.halfEdgeIndex = i;
+                this.vertices[vIdx] = v;
+            }
+        }
     }
 
     private void setOutGoingEdge(int vertexIndex, int edgeIndex)
@@ -170,27 +185,59 @@ public class HalfEdgeMesh
             return neighboringVertices;
 
         int currEdge = startEdge;
+        bool isClosed = false;
 
         do
         {
-            // 1. Soused je vrchol, kam směřuje currEdge
+            // Vrchol, kam ukazuje currEdge (náš soused)
             int neighborIndex = this.edges[this.edges[currEdge].nextEdgeIndex].fromVertexIndex;
             neighboringVertices.Add(neighborIndex);
 
-            // 2. Najdeme hranu v tomtéž trojúhelníku, která do našeho vrcholu vstupuje (prevEdge = next -> next)
+            // Hledáme hranu vstupující do našeho vrcholu (prev = next -> next)
             int next = this.edges[currEdge].nextEdgeIndex;
             int prev = this.edges[next].nextEdgeIndex;
 
-            // 3. Přeskočíme do sousedního trojúhelníku
+            // Přechod do sousedního trojúhelníku
             currEdge = this.edges[prev].twinEdgeIndex;
 
-            // Ošetření hranice sítě (otevřený mesh)
+            if (currEdge == startEdge)
+            {
+                isClosed = true;
+                break;
+            }
+
             if (currEdge == -1)
+            {
+                int boundaryNeighbor = this.edges[prev].fromVertexIndex;
+                neighboringVertices.Add(boundaryNeighbor);
+                break;
+            }
+
+        } while (true);
+
+        if (isClosed)
+        {
+            return neighboringVertices;
+        }
+
+        List<int> reverseNeighbors = new List<int>();
+        currEdge = startEdge;
+
+        while (this.edges[currEdge].twinEdgeIndex != -1)
+        {
+            int twin = this.edges[currEdge].twinEdgeIndex;
+            currEdge = this.edges[twin].nextEdgeIndex;
+
+            if (currEdge == startEdge)
                 break;
 
-        } while (currEdge != startEdge);
+            int neighborIndex = this.edges[this.edges[currEdge].nextEdgeIndex].fromVertexIndex;
+            reverseNeighbors.Add(neighborIndex);
+        }
+        reverseNeighbors.Reverse();
+        reverseNeighbors.AddRange(neighboringVertices);
 
-        return neighboringVertices;
+        return reverseNeighbors;
     }
 
     public void printVerNeiborhood(int vertexIndex)
@@ -291,41 +338,168 @@ public class HalfEdgeMesh
             this.faces.Add(new HalfEdgeFace(h10i));
             this.faces.Add(new HalfEdgeFace(h20i));
         }
+
+        for (int e = 0; e < this.edges.Count; e++)
+        {
+            if (this.edges[e].twinEdgeIndex == -1)
+            {
+                int vIdx = this.edges[e].fromVertexIndex;
+                HalfEdgeVertex v = this.vertices[vIdx];
+                v.halfEdgeIndex = e;
+                this.vertices[vIdx] = v;
+            }
+        }
     }
 
     private void smooth()
     {
-        List<int> neibs = new List<int>();
-        
-        for(int i = 0; i < this.vertices.Count; i++)
+        // Dočasné pole, abychom nepřepisovali pozice pod rukama!
+        Vector3[] newPositions = new Vector3[this.vertices.Count];
+
+        for (int i = 0; i < this.vertices.Count; i++)
         {
-            if(this.vertices[i].isOriginal == false)
+            List<int> neibs = this.VVQuery(i);
+            if (neibs.Count == 0)
             {
+                newPositions[i] = this.vertices[i].position;
                 continue;
             }
-            
-            neibs = this.VVQuery(i);
-            Vector3 sum = new Vector3();
 
-            for(int j = 0; j < neibs.Count; j++)
+            int startEdge = this.vertices[i].halfEdgeIndex;
+            bool isBoundary = (startEdge != -1 && this.edges[startEdge].twinEdgeIndex == -1);
+
+            if (isBoundary && neibs.Count >= 2)
+            {
+                int leftNeighbor = neibs[0];
+                int rightNeighbor = neibs[neibs.Count - 1];
+
+                Vector3 boundaryPos = (1f / 6f) * this.vertices[leftNeighbor].position
+                                    + (4f / 6f) * this.vertices[i].position
+                                    + (1f / 6f) * this.vertices[rightNeighbor].position;
+
+                newPositions[i] = boundaryPos;
+                continue;
+            }
+
+            Vector3 sum = Vector3.zero;
+
+            for (int j = 0; j < neibs.Count; j++)
             {
                 sum += this.vertices[neibs[j]].position;
             }
 
             int n = neibs.Count;
-            float alpha = (4 - 2 * Mathf.Cos((2 * Mathf.PI)/n)) / 9;
-            Vector3 newP = (1 - alpha) * this.vertices[i].position + alpha/n * sum;
             
+            // Důležité: 'f' za čísly, aby se neaplikovalo celočíselné dělení
+            float alpha = (4f - 2f * Mathf.Cos((2f * Mathf.PI) / n)) / 9f;
+            Vector3 newP = (1f - alpha) * this.vertices[i].position + (alpha / n) * sum;
+
+            newPositions[i] = newP;
+        }
+
+        // AŽ TEĎ, když mají všechny vrcholy spočítáno, je hromadně přesuneme
+        for (int i = 0; i < this.vertices.Count; i++)
+        {
+            if (this.vertices[i].isOriginal)
+            {
+                HalfEdgeVertex v = this.vertices[i];
+                v.position = newPositions[i];
+                this.vertices[i] = v;
+            }
+        }
+    }
+
+    private void flip()
+    {
+        for(int i = 0; i < this.edges.Count; i++)
+        {
+            HalfEdgeEdge e = this.edges[i];
+
+            if (!e.isOriginal || i >= e.twinEdgeIndex || e.twinEdgeIndex == -1)
+            {
+                continue;
+            }
+
+            int f00i = i;
+            int f01i = this.edges[i].nextEdgeIndex;
+            int f02i = this.edges[f01i].nextEdgeIndex;
+            int f10i = this.edges[f00i].twinEdgeIndex;
+            int f11i = this.edges[f10i].nextEdgeIndex;
+            int f12i = this.edges[f11i].nextEdgeIndex;
+
+            int oldV0 = e.fromVertexIndex;
+            int oldV1 = this.edges[f10i].fromVertexIndex;
+
+            // new f00/f10 from vertex index
+            int nf00fvi = this.edges[f12i].fromVertexIndex;
+            int nf10fvi = this.edges[f02i].fromVertexIndex;
+            
+            // new faces
+            int nf00fi = this.edges[f00i].faceIndex;
+            int nf10fi = this.edges[f10i].faceIndex;
+
+            HalfEdgeEdge nf00 = new HalfEdgeEdge(nf00fvi,nf00fi,f02i,f10i,false);
+            HalfEdgeEdge nf10 = new HalfEdgeEdge(nf10fvi,nf10fi,f12i,f00i,false);
+            this.edges[f00i] = nf00;
+            this.edges[f10i] = nf10;
+
+            // edges adjustment
+            HalfEdgeEdge f02 = this.edges[f02i];
+            f02.nextEdgeIndex = f11i;
+            this.edges[f02i] = f02;
+
+            HalfEdgeEdge f11 = this.edges[f11i];
+            f11.nextEdgeIndex = f00i;
+            f11.faceIndex = nf00fi;
+            this.edges[f11i] = f11;
+
+            HalfEdgeEdge f12 = this.edges[f12i];
+            f12.nextEdgeIndex = f01i;
+            this.edges[f12i] = f12;
+
+            HalfEdgeEdge f01 = this.edges[f01i];
+            f01.nextEdgeIndex = f10i;
+            f01.faceIndex = nf10fi;
+            this.edges[f01i] = f01;
+
+            // Aktualizace referenčních hran pro stěny
+            this.faces[nf00fi] = new HalfEdgeFace(f00i);
+            this.faces[nf10fi] = new HalfEdgeFace(f10i);
+
+            // Pojistka pro vrcholy: aby neukazovaly na hranu, která už z nich nevychází
+            HalfEdgeVertex v0 = this.vertices[oldV0];
+            v0.halfEdgeIndex = f01i;
+            this.vertices[oldV0] = v0;
+
+            HalfEdgeVertex v1 = this.vertices[oldV1];
+            v1.halfEdgeIndex = f11i;
+            this.vertices[oldV1] = v1;
+        }
+    }
+
+    private void resetOriginalFlags()
+    {
+        for(int i = 0; i < this.edges.Count; i++)
+        {
+            HalfEdgeEdge e = this.edges[i];
+            e.isOriginal = true;
+            this.edges[i] = e;
+        }
+
+        for(int i = 0; i < this.vertices.Count; i++)
+        {
             HalfEdgeVertex v = this.vertices[i];
-            v.position = newP;
+            v.isOriginal = true;
             this.vertices[i] = v;
         }
     }
 
     public void subDivide()
     {
-        this.split();
         this.smooth();
+        this.split();
+        this.flip();
+        this.resetOriginalFlags();
     }
 
 }
