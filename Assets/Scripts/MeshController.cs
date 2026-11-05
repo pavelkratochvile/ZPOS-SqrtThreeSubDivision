@@ -8,6 +8,9 @@ public class MeshController : MonoBehaviour
     [SerializeField] private MeshFilter meshFilter;
     [SerializeField] private Button subDivideButton;
     [SerializeField] private float rotationSpeed = 90f;
+    [SerializeField] private bool divideBorderTriangles;
+    [SerializeField] private float creaseWeight;
+    [SerializeField] private bool nonLinearBoundarySmoothing;
 
     private HalfEdgeMesh halfEdgeMesh;
 
@@ -66,6 +69,7 @@ public class MeshController : MonoBehaviour
 
         // 3. Inicializace Half-Edge s opravenými (svařenými) daty
         halfEdgeMesh = new HalfEdgeMesh(weldedVertices, weldedIndices);
+        SetWireframe(meshFilter.mesh);
 
         Debug.Log(halfEdgeMesh.getVertices().Length);
         
@@ -73,7 +77,7 @@ public class MeshController : MonoBehaviour
 
     private void SubdivideMesh()
     {
-        this.halfEdgeMesh.subDivide();
+        this.halfEdgeMesh.subDivide(this.divideBorderTriangles, this.creaseWeight, this.nonLinearBoundarySmoothing);
         Debug.Log(halfEdgeMesh.getVertices().Length);
         UnWeldMeshFlat();
     }
@@ -92,6 +96,7 @@ public class MeshController : MonoBehaviour
         mesh.triangles = halfEdgeMesh.getIndices();
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
+        SetWireframe(mesh);
 
         this.meshFilter.mesh = mesh;
     }
@@ -126,8 +131,31 @@ public class MeshController : MonoBehaviour
         // Přepočítá kolmé normály zvlášť pro každou plošku (vytvoří ostré hrany)
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
+        SetWireframe(mesh);
 
         this.meshFilter.mesh = mesh;
+    }
+
+    private void SetWireframe(Mesh mesh)
+    {
+        int[] triangles = mesh.triangles;
+        int[] lines = new int[triangles.Length * 2];
+
+        for (int i = 0; i < triangles.Length; i += 3)
+        {
+            int lineIndex = i * 2;
+
+            lines[lineIndex] = triangles[i];
+            lines[lineIndex + 1] = triangles[i + 1];
+
+            lines[lineIndex + 2] = triangles[i + 1];
+            lines[lineIndex + 3] = triangles[i + 2];
+
+            lines[lineIndex + 4] = triangles[i + 2];
+            lines[lineIndex + 5] = triangles[i];
+        }
+
+        mesh.SetIndices(lines, MeshTopology.Lines, 0);
     }
 
     // Pomocná metoda pro sloučení rozpojených vrcholů

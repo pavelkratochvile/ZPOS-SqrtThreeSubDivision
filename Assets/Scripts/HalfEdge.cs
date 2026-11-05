@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using UnityEngine.Rendering;
 using Unity.VisualScripting;
 using System;
-
+using Unity.Mathematics;
 
 public class FaceVertexIndices
 {
@@ -19,6 +19,7 @@ public class FaceVertexIndices
         this.id2 = id2;
     }
 }
+
 public struct HalfEdgeEdge
 {
     public int fromVertexIndex;
@@ -50,12 +51,14 @@ public struct HalfEdgeFace
 public struct HalfEdgeVertex
 {
     public Vector3 position;
+    public Vector3 oldPosition;
     public int halfEdgeIndex;
     public bool isOriginal;
 
     public HalfEdgeVertex(Vector3 position, int halfEdgeIndex, bool isOriginal)
     {
         this.position = position;
+        this.oldPosition = position;
         this.halfEdgeIndex = halfEdgeIndex;
         this.isOriginal = isOriginal;
     }
@@ -176,6 +179,7 @@ public class HalfEdgeMesh
 
         return new FaceVertexIndices(he0.fromVertexIndex, he1.fromVertexIndex, he2.fromVertexIndex);
     }
+
     public List<int> VVQuery(int vertexIndex)
     {
         List<int> neighboringVertices = new List<int>();
@@ -312,17 +316,17 @@ public class HalfEdgeMesh
             int newVertexIndex = this.vertices.Count - 1;
 
             //pridani h01
-            this.edges.Add(new HalfEdgeEdge(p1,t0,h02i,h12i,false));
+            this.edges.Add(new HalfEdgeEdge(p1, t0, h02i, h12i, false));
             //pridani h12
-            this.edges.Add(new HalfEdgeEdge(newVertexIndex,t1,h10i,h01i,false));
+            this.edges.Add(new HalfEdgeEdge(newVertexIndex, t1, h10i, h01i, false));
             //pridani h11
-            this.edges.Add(new HalfEdgeEdge(p2,t1,h12i,h22i,false));
+            this.edges.Add(new HalfEdgeEdge(p2, t1, h12i, h22i, false));
             //pridani h22
-            this.edges.Add(new HalfEdgeEdge(newVertexIndex,t2,h20i,h11i,false));
+            this.edges.Add(new HalfEdgeEdge(newVertexIndex, t2, h20i, h11i, false));
             //pridani h21
-            this.edges.Add(new HalfEdgeEdge(p0,t2,h22i,h02i,false));
+            this.edges.Add(new HalfEdgeEdge(p0, t2, h22i, h02i, false));
             //pridani h02
-            this.edges.Add(new HalfEdgeEdge(newVertexIndex,t0,h00i,h21i,false));
+            this.edges.Add(new HalfEdgeEdge(newVertexIndex, t0, h00i, h21i, false));
 
             h0.nextEdgeIndex = h01i;
             this.edges[h00i] = h0;
@@ -351,14 +355,14 @@ public class HalfEdgeMesh
         }
     }
 
-    private void smooth()
+    private void smooth(float creaseWeight, bool nonLinearBoundarySmoothing)
     {
-        // Dočasné pole, abychom nepřepisovali pozice pod rukama!
         Vector3[] newPositions = new Vector3[this.vertices.Count];
 
         for (int i = 0; i < this.vertices.Count; i++)
         {
             List<int> neibs = this.VVQuery(i);
+            
             if (neibs.Count == 0)
             {
                 newPositions[i] = this.vertices[i].position;
@@ -370,53 +374,137 @@ public class HalfEdgeMesh
 
             if (isBoundary && neibs.Count >= 2)
             {
+                // Pro hranici: Můžeme interpolovat mezi původní pozicí (fixed) 
+                // a případně 1D vyhlazením podél okraje, nebo nechat fixní.
+                // Zde držíme pevnou pozici jako základ pro uzamčení:
+                Vector3 fixedPosition = this.vertices[i].position;
+                
+                // Pokud chceš, aby se okraj při creaseWeight < 1 mírně zjemnil 
+                // podle sousedů na hranici (left/right), můžeš spočítat 1D průměr:
                 int leftNeighbor = neibs[0];
                 int rightNeighbor = neibs[neibs.Count - 1];
-
-                Vector3 boundaryPos = (1f / 6f) * this.vertices[leftNeighbor].position
+                Vector3 boundarySmoothLinear = (1f / 6f) * this.vertices[leftNeighbor].position
                                     + (4f / 6f) * this.vertices[i].position
                                     + (1f / 6f) * this.vertices[rightNeighbor].position;
+                
+                //nelinearni vypocet nove pozice bodu s vyuzitim znalosti vzdalenosti v prostoru
+                Vector3 leftNeighborPos = this.vertices[leftNeighbor].position;
+                Vector3 rightNeighborPos = this.vertices[rightNeighbor].position;
+                Vector3 vertexPos = this.vertices[i].position;
 
-                newPositions[i] = boundaryPos;
-                continue;
+                float leftDist = Vector3.Distance(leftNeighborPos, vertexPos);
+                float rightDist = Vector3.Distance(rightNeighborPos, vertexPos);
+                leftDist = MathF.Max(leftDist, 0.0001f);
+                rightDist = MathF.Max(rightDist, 0.0001f);
+
+                float weightLeft = 1f / leftDist;
+                float weightRight = 1f / rightDist;
+                float weightCenter = 2f;
+                float totalW = weightLeft + weightRight + weightCenter;
+
+                Vector3 boundarySmoothNonLinear = (weightLeft * leftNeighborPos + weightRight * rightNeighborPos + weightCenter * vertexPos) / totalW;
+
+                // creaseWeight určuje, jak moc se okraj drží (1 = ostrý/fixní, 0 = hladký/vyhlazený)
+                // Nebo pokud to máš obráceně (1 = plně vyhlazený), prohoď parametry v Lerpu.
+                if (nonLinearBoundarySmoothing)
+                {
+                    newPositions[i] = Vector3.Lerp(boundarySmoothNonLinear, fixedPosition, creaseWeight);
+                }
+                else
+                {
+                    newPositions[i] = Vector3.Lerp(boundarySmoothLinear, fixedPosition, creaseWeight);
+                }
             }
-
-            Vector3 sum = Vector3.zero;
-
-            for (int j = 0; j < neibs.Count; j++)
+            else
             {
-                sum += this.vertices[neibs[j]].position;
+                // OPRAVA: Vnitřní vrcholy se musejí počítat standardním plošným vyhlazováním!
+                Vector3 sum = Vector3.zero;
+                for (int j = 0; j < neibs.Count; j++)
+                {
+                    sum += this.vertices[neibs[j]].position;
+                }
+                int n = neibs.Count;
+                float alpha = (4f - 2f * Mathf.Cos((2f * Mathf.PI) / n)) / 9f;
+                Vector3 smoothPosition = (1f - alpha) * this.vertices[i].position + (alpha / n) * sum;
+
+                newPositions[i] = smoothPosition;
             }
-
-            int n = neibs.Count;
-            
-            // Důležité: 'f' za čísly, aby se neaplikovalo celočíselné dělení
-            float alpha = (4f - 2f * Mathf.Cos((2f * Mathf.PI) / n)) / 9f;
-            Vector3 newP = (1f - alpha) * this.vertices[i].position + (alpha / n) * sum;
-
-            newPositions[i] = newP;
         }
 
-        // AŽ TEĎ, když mají všechny vrcholy spočítáno, je hromadně přesuneme
+        // Hromadný přesun pozic
         for (int i = 0; i < this.vertices.Count; i++)
         {
             if (this.vertices[i].isOriginal)
             {
                 HalfEdgeVertex v = this.vertices[i];
+                v.oldPosition = v.position; 
                 v.position = newPositions[i];
                 this.vertices[i] = v;
             }
         }
     }
-
-    private void flip()
+    private void flip(bool divideBorderTriangles)
     {
+        List<HalfEdgeEdge> borderFacesDivideEdges = new List<HalfEdgeEdge>();
+        int alreadyAddedEdgesCount = 0;
+        
         for(int i = 0; i < this.edges.Count; i++)
         {
             HalfEdgeEdge e = this.edges[i];
 
-            if (!e.isOriginal || i >= e.twinEdgeIndex || e.twinEdgeIndex == -1)
+            // Pripad, kdy hrana neni puvodni nebo kdyz jsme ji uz flipnuli v jinem trojuhelniku
+            if (!e.isOriginal || (e.twinEdgeIndex != -1 && i >= e.twinEdgeIndex)) continue;
+
+            // Pripad, kdy je hrana na borderu a my tyto nechceme dělit
+            if(e.twinEdgeIndex == -1 && !divideBorderTriangles) continue;
+
+            // Pripad, kdy je hrana na borderu a my tyto hrany chceme dělit
+            if(e.twinEdgeIndex == -1 && divideBorderTriangles)
             {
+                int e0Index = i;
+                int e1Index = this.edges[i].nextEdgeIndex;
+                int e2Index = this.edges[e1Index].nextEdgeIndex;
+
+                Vector3 borderVCord0 = this.vertices[e.fromVertexIndex].position;
+                Vector3 borderVCord1 = this.vertices[this.edges[e1Index].fromVertexIndex].position;
+                Vector3 newBorderVCord = (borderVCord0 + borderVCord1) / 2;
+                int middleVertexIndex = this.edges[e2Index].fromVertexIndex;
+
+                // Indexy novych hran tak jak je dano v dokumentaci
+                int ne0Index = alreadyAddedEdgesCount + this.edges.Count + 0;
+                int ne1Index = alreadyAddedEdgesCount + this.edges.Count + 1;
+                int ne2Index = alreadyAddedEdgesCount + this.edges.Count + 2;
+                
+                // Index noveho bodu tak jak je dano v dokumentaci
+                int nvIndex = this.vertices.Count;
+
+                // Index noveho trojuhelniku tak jak je dano v dokumentaci
+                int nfIndex = this.faces.Count;
+                int ofIndex = this.edges[e2Index].faceIndex;
+
+                this.faces.Add(new HalfEdgeFace(ne2Index));
+                this.vertices.Add(new HalfEdgeVertex(newBorderVCord, ne0Index, false));
+                
+                // Přidání hran tvořících vnější i vnitřní obrys hraničního rozdělení
+                borderFacesDivideEdges.Add(new HalfEdgeEdge(nvIndex, nfIndex, e1Index, -1, false));
+                borderFacesDivideEdges.Add(new HalfEdgeEdge(nvIndex, ofIndex, e2Index, ne2Index, false));
+                borderFacesDivideEdges.Add(new HalfEdgeEdge(middleVertexIndex, nfIndex, ne0Index, ne1Index, false));
+
+                // Douprava dalsich nalezitosti
+                HalfEdgeFace of = this.faces[ofIndex];
+                of.edgeIndex = e2Index;
+                this.faces[ofIndex] = of;
+
+                HalfEdgeEdge e1 = this.edges[e1Index];
+                e1.faceIndex = nfIndex;        // Přesun hrany do nové stěny
+                e1.nextEdgeIndex = ne2Index;   // Napojení na novou vnitřní dělící hranu
+                this.edges[e1Index] = e1;
+
+                HalfEdgeEdge e0 = this.edges[e0Index];
+                e0.nextEdgeIndex = ne1Index;
+                this.edges[e0Index] = e0;
+
+                alreadyAddedEdgesCount += 3;
                 continue;
             }
 
@@ -438,8 +526,8 @@ public class HalfEdgeMesh
             int nf00fi = this.edges[f00i].faceIndex;
             int nf10fi = this.edges[f10i].faceIndex;
 
-            HalfEdgeEdge nf00 = new HalfEdgeEdge(nf00fvi,nf00fi,f02i,f10i,false);
-            HalfEdgeEdge nf10 = new HalfEdgeEdge(nf10fvi,nf10fi,f12i,f00i,false);
+            HalfEdgeEdge nf00 = new HalfEdgeEdge(nf00fvi, nf00fi, f02i, f10i, false);
+            HalfEdgeEdge nf10 = new HalfEdgeEdge(nf10fvi, nf10fi, f12i, f00i, false);
             this.edges[f00i] = nf00;
             this.edges[f10i] = nf10;
 
@@ -475,6 +563,21 @@ public class HalfEdgeMesh
             v1.halfEdgeIndex = f11i;
             this.vertices[oldV1] = v1;
         }
+        
+        this.edges.AddRange(borderFacesDivideEdges);
+
+        // KLIČOVÁ POJISTKA: Znovunavázání okrajových vrcholů na správné vnější hrany,
+        // aby metoda smooth() v další iteraci správně rozpoznala isBoundary = true.
+        for (int eIdx = 0; eIdx < this.edges.Count; eIdx++)
+        {
+            if (this.edges[eIdx].twinEdgeIndex == -1)
+            {
+                int vIdx = this.edges[eIdx].fromVertexIndex;
+                HalfEdgeVertex v = this.vertices[vIdx];
+                v.halfEdgeIndex = eIdx;
+                this.vertices[vIdx] = v;
+            }
+        }
     }
 
     private void resetOriginalFlags()
@@ -494,12 +597,11 @@ public class HalfEdgeMesh
         }
     }
 
-    public void subDivide()
+    public void subDivide(bool divideBorderTriangles, float creaseWeight, bool nonLinearBoundarySmoothing)
     {
-        this.smooth();
+        this.smooth(creaseWeight, nonLinearBoundarySmoothing);
         this.split();
-        this.flip();
+        this.flip(divideBorderTriangles);
         this.resetOriginalFlags();
     }
-
 }
