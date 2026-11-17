@@ -482,7 +482,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: -8679921383154817045, guid: 70454d645884ab34a887392749ed97ce, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -0.04
+      value: -6.38
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 70454d645884ab34a887392749ed97ce, type: 3}
       propertyPath: m_LocalPosition.y
@@ -838,7 +838,7 @@ Transform:
   m_GameObject: {fileID: 1348035967}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -5.31, y: -0.74, z: -7.81}
+  m_LocalPosition: {x: -0.05, y: -0.39, z: -7.07}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1024,7 +1024,7 @@ MonoBehaviour:
   subDivideButton: {fileID: 1406765735}
   rotationSpeed: 90
   divideBorderTriangles: 1
-  creaseWeight: 0
+  creaseWeight: 1
   nonLinearBoundarySmoothing: 1
 --- !u!64 &1664547426
 MeshCollider:
@@ -1114,7 +1114,7 @@ Transform:
   m_GameObject: {fileID: 1664547424}
   serializedVersion: 2
   m_LocalRotation: {x: -0.0008318666, y: -0, z: -0, w: 0.9999997}
-  m_LocalPosition: {x: -0.02, y: -0.87, z: -6.26}
+  m_LocalPosition: {x: -2.35, y: -0.87, z: -6.26}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

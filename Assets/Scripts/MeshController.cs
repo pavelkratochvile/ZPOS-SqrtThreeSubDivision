@@ -69,6 +69,7 @@ public class MeshController : MonoBehaviour
 
         // 3. Inicializace Half-Edge s opravenými (svařenými) daty
         halfEdgeMesh = new HalfEdgeMesh(weldedVertices, weldedIndices);
+        this.halfEdgeMesh.TestCubeCreases(this.creaseWeight);
         SetWireframe(meshFilter.mesh);
 
         Debug.Log(halfEdgeMesh.getVertices().Length);
