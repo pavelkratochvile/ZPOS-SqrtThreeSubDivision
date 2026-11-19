@@ -5,15 +5,29 @@ using System.Collections.Generic;
 
 public class MeshController : MonoBehaviour
 {
+    // Komponent sítě, jejíž geometrii budeme upravovat
     [SerializeField] private MeshFilter meshFilter;
+    // Tlačítko pro spuštění další iterace subdivize
     [SerializeField] private Button subDivideButton;
+    // Rychlost otáčení modelu při ovládání klávesnicí
     [SerializeField] private float rotationSpeed = 90f;
+    // Volba, zda se mají dělit také hraniční trojúhelníky
     [SerializeField] private bool divideBorderTriangles;
-    [SerializeField] private float creaseWeight;
+    // Váha určující zachování ostrých hran na hranici sítě
+    [SerializeField] private float borderCreaseWeight;
+    // Volba nelineárního vyhlazení hraničních vrcholů
     [SerializeField] private bool nonLinearBoundarySmoothing;
+    // Volba výpočtu ostrosti hran podle dihedrálního úhlu
+    [SerializeField] private bool dihedralAngleBasedSmooting;
+    // Dolní mez dihedrálního úhlu pro výpočet ostrosti
+    [SerializeField] private float minDihedralAngle;
+    // Horní mez dihedrálního úhlu pro výpočet ostrosti
+    [SerializeField] private float maxDihedralAngle;
 
+    // Half-Edge reprezentace upravované sítě
     private HalfEdgeMesh halfEdgeMesh;
 
+    // Metoda pro otáčení modelu pomocí šipek na klávesnici
     private void Update()
     {
         Keyboard keyboard = Keyboard.current;
@@ -51,6 +65,7 @@ public class MeshController : MonoBehaviour
         transform.Rotate(rotation * rotationSpeed * Time.deltaTime, Space.Self);
     }
     
+    // Metoda pro inicializaci sítě a obsluhu tlačítka subdivize
     void Start()
     {
         this.meshFilter = GetComponentInChildren<MeshFilter>();
@@ -60,34 +75,35 @@ public class MeshController : MonoBehaviour
             subDivideButton.onClick.AddListener(SubdivideMesh);
         }
         
-        // 1. Získání původních dat ze sítě
+        // Načtení pozic vrcholů a indexů trojúhelníků původního meshe
         Vector3[] originalVertices = meshFilter.mesh.vertices;
         int[] originalIndices = meshFilter.mesh.triangles;
         
-        // 2. Sloučení duplicitních vrcholů (svaření)
+        // Sloučení vrcholů se stejnou polohou, které jsou v meshi oddělené
         WeldMesh(originalVertices, originalIndices, out Vector3[] weldedVertices, out int[] weldedIndices);
 
-        // 3. Inicializace Half-Edge s opravenými (svařenými) daty
-        halfEdgeMesh = new HalfEdgeMesh(weldedVertices, weldedIndices);
-        this.halfEdgeMesh.TestCubeCreases(this.creaseWeight);
+        // Vytvoření Half-Edge reprezentace ze svařených dat
+        halfEdgeMesh = new HalfEdgeMesh(weldedVertices, weldedIndices, dihedralAngleBasedSmooting, minDihedralAngle, maxDihedralAngle);
         SetWireframe(meshFilter.mesh);
 
         Debug.Log(halfEdgeMesh.getVertices().Length);
         
     }
 
+    // Metoda pro provedení subdivize a aktualizaci zobrazeného meshe
     private void SubdivideMesh()
     {
-        this.halfEdgeMesh.subDivide(this.divideBorderTriangles, this.creaseWeight, this.nonLinearBoundarySmoothing);
+        this.halfEdgeMesh.subDivide(this.divideBorderTriangles, this.borderCreaseWeight, this.nonLinearBoundarySmoothing);
         Debug.Log(halfEdgeMesh.getVertices().Length);
         UnWeldMeshFlat();
     }
 
+    // Metoda pro vytvoření meshe se sdílenými vrcholy a vyhlazenými normálami
     private void UnWeldMeshSmooth()
     {
         Mesh mesh = new Mesh();
 
-        // Odemkneme podporu pro více než 65 535 vrcholů:
+        // Pro více než 65 535 vrcholů je nutné použít 32bitové indexy
         if (halfEdgeMesh.vertices.Count > 65535)
         {
             mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
@@ -102,25 +118,26 @@ public class MeshController : MonoBehaviour
         this.meshFilter.mesh = mesh;
     }
 
+    // Metoda pro vytvoření meshe s oddělenými vrcholy jednotlivých stěn
     private void UnWeldMeshFlat()
     {
         Vector3[] weldedVertices = halfEdgeMesh.getVertices();
         int[] weldedIndices = halfEdgeMesh.getIndices();
 
-        // Počet nových vrcholů odpovídá přesně počtu indexů (každý trojúhelník má 3 unikátní vrcholy)
+        // Každý index dostane vlastní vrchol, aby se normály mezi stěnami nesdílely
         Vector3[] flatVertices = new Vector3[weldedIndices.Length];
         int[] flatIndices = new int[weldedIndices.Length];
 
         for (int i = 0; i < weldedIndices.Length; i++)
         {
             flatVertices[i] = weldedVertices[weldedIndices[i]];
-            flatIndices[i] = i; // Indexy jdou lineárně za sebou: 0, 1, 2, 3, 4, 5...
+            // Indexy nových vrcholů tvoří souvislou posloupnost
+            flatIndices[i] = i;
         }
 
         Mesh mesh = new Mesh();
 
-        // Pojistka: pokud má model po subdivizi více než 65 535 vrcholů,
-        // musíme Unity říct, aby použilo 32bitové indexy, jinak by mesh spadl.
+        // Pro více než 65 535 vrcholů je nutné použít 32bitové indexy
         if (flatVertices.Length > 65535)
         {
             mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
@@ -129,7 +146,7 @@ public class MeshController : MonoBehaviour
         mesh.vertices = flatVertices;
         mesh.triangles = flatIndices;
 
-        // Přepočítá kolmé normály zvlášť pro každou plošku (vytvoří ostré hrany)
+        // Přepočet normál pro oddělené vrcholy zachová ostré hrany mezi stěnami
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
         SetWireframe(mesh);
@@ -137,6 +154,7 @@ public class MeshController : MonoBehaviour
         this.meshFilter.mesh = mesh;
     }
 
+    // Metoda pro vytvoření drátového zobrazení hran trojúhelníků
     private void SetWireframe(Mesh mesh)
     {
         int[] triangles = mesh.triangles;
@@ -159,7 +177,7 @@ public class MeshController : MonoBehaviour
         mesh.SetIndices(lines, MeshTopology.Lines, 0);
     }
 
-    // Pomocná metoda pro sloučení rozpojených vrcholů
+    // Metoda pro sloučení vrcholů se stejnou polohou a úpravu jejich indexů
     private void WeldMesh(Vector3[] originalVertices, int[] originalIndices, out Vector3[] weldedVertices, out int[] weldedIndices)
     {
         List<Vector3> newVertices = new List<Vector3>();
@@ -170,14 +188,14 @@ public class MeshController : MonoBehaviour
         {
             Vector3 pos = originalVertices[originalIndices[i]];
             
-            // Zaokrouhlení pro eliminaci nepřesností pohyblivé řádové čárky (float)
+            // Zaokrouhlení omezuje rozdíly způsobené nepřesností čísel typu float
             Vector3 roundedPos = new Vector3(
                 Mathf.Round(pos.x * 1000f) / 1000f,
                 Mathf.Round(pos.y * 1000f) / 1000f,
                 Mathf.Round(pos.z * 1000f) / 1000f
             );
 
-            // Pokud tento vrchol ještě nemáme, přidáme ho
+            // Dosud neznámou polohu přidáme do seznamu a uložíme její nový index
             if (!vertexMap.TryGetValue(roundedPos, out int newIndex))
             {
                 newIndex = newVertices.Count;
@@ -185,7 +203,7 @@ public class MeshController : MonoBehaviour
                 vertexMap.Add(roundedPos, newIndex);
             }
 
-            // Zapíšeme opravený index pro daný trojúhelník
+            // Původní index nahradíme indexem svařeného vrcholu
             weldedIndices[i] = newIndex;
         }
 

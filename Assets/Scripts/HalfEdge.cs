@@ -6,9 +6,12 @@ using Unity.VisualScripting;
 using System;
 using Unity.Mathematics;
 using System.Runtime.CompilerServices;
+using UnityEngine.TextCore;
 
+// Struktuta pro reprezentaci vrcholů stěny
 public class FaceVertexIndices
 {
+    // Indexy vrcholů
     int id0;
     int id1;
     int id2;
@@ -21,13 +24,20 @@ public class FaceVertexIndices
     }
 }
 
+// Struktuta pro reprezentaci polohrany
 public struct HalfEdgeEdge
 {
+    // Index vrcholu, ze kterého polohrana vychází
     public int fromVertexIndex;
+    // Index stěny, které polohrana náleží
     public int faceIndex;
+    // Index následující polohrany
     public int nextEdgeIndex;
+    // Index sousední polohrany
     public int twinEdgeIndex;
+    // Flag pro originalitu polohrany v rámci jedné iterace
     public bool isOriginal;
+    // Ostrost polohrany
     public float creaseWeight;
 
     public HalfEdgeEdge(int fromVertexIndex, int faceIndex, int nextEdgeIndex, int twinEdgeIndex, bool isOriginal, float creaseWeight)
@@ -41,8 +51,10 @@ public struct HalfEdgeEdge
     }
 }
 
+// Struktuta pro reprezentaci stěny
 public struct HalfEdgeFace
 {
+    // Index jedné polohrany v trojúhelníku
     public int edgeIndex;
 
     public HalfEdgeFace(int edgeIndex)
@@ -51,11 +63,16 @@ public struct HalfEdgeFace
     }
 }
 
+// Struktuta pro reprezentaci vrcholu
 public struct HalfEdgeVertex
 {
+    // Poloha vrcholu v prostoru
     public Vector3 position;
+    // Původní pozice vrcholu v prostoru v rímci jedné iterace
     public Vector3 oldPosition;
+    // Index jedné z vycházejících hran
     public int halfEdgeIndex;
+    // Flag pro originalitu vrcholu v rámci jedné iterace
     public bool isOriginal;
 
     public HalfEdgeVertex(Vector3 position, int halfEdgeIndex, bool isOriginal)
@@ -67,25 +84,29 @@ public struct HalfEdgeVertex
     }
 }
 
+// Struktuta pro reprezentaci polygonální sítě (mesh)
 public class HalfEdgeMesh
 {
+    // Seznam polohran sítě
     public List<HalfEdgeEdge> edges;
+    // Seznam stěn sítě
     public List<HalfEdgeFace> faces;
+    // Seznam vrcholů sítě
     public List<HalfEdgeVertex> vertices;
 
-    public HalfEdgeMesh(Vector3[] vertices, int[] indices)
+    public HalfEdgeMesh(Vector3[] vertices, int[] indices, bool dihedralAngleBasedSmooting, float minDihedralAngle, float maxDihedralAngle)
     {
         this.vertices = new List<HalfEdgeVertex>(vertices.Length);
         this.edges = new List<HalfEdgeEdge>(indices.Length * 2);
         this.faces = new List<HalfEdgeFace>(indices.Length / 3);
 
-        // Inicializace seznamu vertexů
+        // Inicializace seznamu vrcholů
         for(int i = 0; i < vertices.Length; i++)
         {
             this.vertices.Add(new HalfEdgeVertex(vertices[i], -1, true));
         }
 
-        // Vytvoření polohran a faces
+        // Vytvoření polohran a stěn
         Dictionary<(int fromVertex, int toVertex), int> edgeLookup = new Dictionary<(int, int), int>();
         int trianglesCount = indices.Length / 3;
         for(int t = 0; t < trianglesCount; t++)
@@ -127,65 +148,67 @@ public class HalfEdgeMesh
 
             if(edgeLookup.TryGetValue((toVerIndex, fromVerIndex), out int twinEdgeIndex))
             {
+                // Propojíme sousedních polohran pomocí slovníku
                 heFrom.twinEdgeIndex = twinEdgeIndex;
-                this.edges[i] = heFrom;
-
+                
                 HalfEdgeEdge heTwin = this.edges[twinEdgeIndex];
                 heTwin.twinEdgeIndex = i;   
+
+                // Výpočet dihedrálního úhlu
+                int faceA = heFrom.faceIndex;
+                int faceB = heTwin.faceIndex;
+
+                Vector3 normalA = getFaceNormal(faceA);
+                Vector3 normalB = getFaceNormal(faceB);
+
+                float angle = Vector3.Angle(normalA, normalB);
+                float calculatedCrease = Mathf.InverseLerp(minDihedralAngle, maxDihedralAngle, angle);
+                
+                // Přiřazení váhy na základě volby uživatele
+                if (dihedralAngleBasedSmooting)
+                {
+                    heFrom.creaseWeight = calculatedCrease;
+                    heTwin.creaseWeight = calculatedCrease;
+                }
+                else
+                {
+                    heFrom.creaseWeight = 0f;
+                    heTwin.creaseWeight = 0f;
+                }
+                this.edges[i] = heFrom;
                 this.edges[twinEdgeIndex] = heTwin;
             }
         }
 
-        // Přidat na úplný konec konstruktoru HalfEdgeMesh:
+        // Pro polohrany bez souseda se vynutí obíhání z hrany na okraji
         for (int i = 0; i < this.edges.Count; i++)
         {
-            // Pokud hrana leží na okraji díry (nemá souseda)
             if (this.edges[i].twinEdgeIndex == -1)
             {
                 int vIdx = this.edges[i].fromVertexIndex;
-                HalfEdgeVertex v = this.vertices[vIdx];
-
-                // Vynutíme, aby vrchol začínal obíhání z hrany na okraji!
-                v.halfEdgeIndex = i;
-                this.vertices[vIdx] = v;
+                changeVertexEdge(vIdx, i);
             }
         }
     }
 
-    // Testovaci metoda pro prirazeni crease krchly (jeji hranicnich hran)
-    public void TestCubeCreases(float creaseValue)
+    // Pomocná metoda pro získání normály stěny
+    private Vector3 getFaceNormal(int faceIndex)
     {
+        HalfEdgeEdge e0 = this.edges[this.faces[faceIndex].edgeIndex];
+        HalfEdgeEdge e1 = this.edges[e0.nextEdgeIndex];
+        HalfEdgeEdge e2 = this.edges[e1.nextEdgeIndex];
+        
+        Vector3 p0 = this.vertices[e0.fromVertexIndex].position;
+        Vector3 p1 = this.vertices[e1.fromVertexIndex].position;
+        Vector3 p2 = this.vertices[e2.fromVertexIndex].position;
 
-        for (int i = 0; i < this.edges.Count; i++)
-        {
-            HalfEdgeEdge e = this.edges[i];
-            
-            // Pozice počátečního bodu hrany
-            Vector3 p0 = this.vertices[e.fromVertexIndex].position;
-            
-            // Pozice koncového bodu hrany (začátek následující polohrany)
-            int targetVertexIdx = this.edges[e.nextEdgeIndex].fromVertexIndex;
-            Vector3 p1 = this.vertices[targetVertexIdx].position;
+        Vector3 U = p1 - p0;
+        Vector3 V = p2 - p0;
 
-            // Změříme vzdálenost
-            float edgeLength = Vector3.Distance(p0, p1);
-
-            // Pokud je délka kolem 1.0, je to vnější obrysová hrana krychle
-            // Pokud je to cca 1.414, je to vnitřní úhlopříčka, kterou ignorujeme
-            if (edgeLength < 1.1f)
-            {
-                e.creaseWeight = creaseValue;
-            }
-            else
-            {
-                e.creaseWeight = 0f;
-            }
-
-            // Uložíme upravenou hranu zpět
-            this.edges[i] = e;
-        }
+        return Vector3.Cross(U, V). normalized;
     }
 
+    // Pomocná metoda pro změnu navazující hrany
     private void changeNextEdge(int edgeIndex, int nextEdgeIndex)
     {
         HalfEdgeEdge e = this.edges[edgeIndex];
@@ -193,13 +216,15 @@ public class HalfEdgeMesh
         this.edges[edgeIndex] = e;
     }
 
+    // Pomocná metoda pro změnu hrany korespondující ke stěně
     private void changeFaceEdge(int faceIndex, int edgeIndex)
     {
         HalfEdgeFace f = this.faces[faceIndex];
         f.edgeIndex = edgeIndex;
         this.faces[faceIndex] = f;
     }
-
+    
+    // Pomocná metoda pro změnu vrcholu ze kterého hrana vychází
     private void changeEdgeVertex(int edgeIndex, int fromVertexIndex)
     {
         HalfEdgeEdge e = this.edges[edgeIndex];
@@ -207,6 +232,7 @@ public class HalfEdgeMesh
         this.edges[edgeIndex] = e;
     }
 
+    // Pomocná metoda pro změnu navazující hrany
     private void changeEdgeFace(int edgeIndex, int faceIndex)
     {
         HalfEdgeEdge e = this.edges[edgeIndex];
@@ -214,6 +240,7 @@ public class HalfEdgeMesh
         this.edges[edgeIndex] = e;
     }
 
+    // Pomocná metoda pro změnu polohrany vycházející z vrcholu
     private void changeVertexEdge(int vertexIndex, int halfEdgeIndex)
     {
         HalfEdgeVertex v = this.vertices[vertexIndex];
@@ -221,16 +248,16 @@ public class HalfEdgeMesh
         this.vertices[vertexIndex] = v;
     }
 
+    // Pomocná metoda pro nastavení vycházející polohrany z vrcholu
     private void setOutGoingEdge(int vertexIndex, int edgeIndex)
     {
-        HalfEdgeVertex v = this.vertices[vertexIndex];
-        if(v.halfEdgeIndex == -1)
+        if (this.vertices[vertexIndex].halfEdgeIndex == -1)
         {
-            v.halfEdgeIndex = edgeIndex;
-            this.vertices[vertexIndex] = v;
+            changeVertexEdge(vertexIndex, edgeIndex);
         }
     }
 
+    // Pomocná metoda pro debug
     public void writeInfo()
     {
         HalfEdgeVertex hev = vertices[0];
@@ -242,6 +269,7 @@ public class HalfEdgeMesh
         Debug.Log(isOriginal);
     }
 
+    // Metoda pro zjištění všech vecholů jedné stěny
     public FaceVertexIndices FVQuery(int faceIndex)
     {
         HalfEdgeFace hef = this.faces[faceIndex];
@@ -252,6 +280,7 @@ public class HalfEdgeMesh
         return new FaceVertexIndices(he0.fromVertexIndex, he1.fromVertexIndex, he2.fromVertexIndex);
     }
 
+    // Metoda pro získání sousedních vrcholů zadaného vrcholu
     public List<int> VVQuery(int vertexIndex)
     {
         List<int> neighboringVertices = new List<int>();
@@ -265,15 +294,15 @@ public class HalfEdgeMesh
 
         do
         {
-            // Vrchol, kam ukazuje currEdge (náš soused)
+            // Vrchol na konci aktuální polohrany je sousedem zadaného vrcholu
             int neighborIndex = this.edges[this.edges[currEdge].nextEdgeIndex].fromVertexIndex;
             neighboringVertices.Add(neighborIndex);
 
-            // Hledáme hranu vstupující do našeho vrcholu (prev = next -> next)
+            // Najdeme poslední polohranu trojúhelníku, která končí v procházeném vrcholu
             int next = this.edges[currEdge].nextEdgeIndex;
             int prev = this.edges[next].nextEdgeIndex;
 
-            // Přechod do sousedního trojúhelníku
+            // Přes její dvojici přejdeme do sousedního trojúhelníku
             currEdge = this.edges[prev].twinEdgeIndex;
 
             if (currEdge == startEdge)
@@ -316,6 +345,7 @@ public class HalfEdgeMesh
         return reverseNeighbors;
     }
 
+    // Metoda pro získání sousedů napojených polohranami s nenulovou váhou ostrosti
     public (List<int>, float) VVQueryInsideVertexCreaseNeibs(int vertexIndex)
     {
         List<int> neighboringVertices = new List<int>();
@@ -331,6 +361,7 @@ public class HalfEdgeMesh
 
         do
         {
+            // Soused na konci polohrany se přidá pouze při nenulové ostrosti
             int neib = this.edges[this.edges[currEdge].nextEdgeIndex].fromVertexIndex;
             if(this.edges[currEdge].creaseWeight > 0)
             {
@@ -338,6 +369,7 @@ public class HalfEdgeMesh
                 neighboringVertices.Add(neib);
             }
 
+            // Obíhání pokračuje do sousedního trojúhelníku přes dvojici poslední polohrany
             int nextNeibEdge = this.edges[currEdge].nextEdgeIndex;
             int toCenterEdge = this.edges[nextNeibEdge].nextEdgeIndex;
             currEdge = this.edges[toCenterEdge].twinEdgeIndex;
@@ -347,7 +379,7 @@ public class HalfEdgeMesh
         return (neighboringVertices, maxCrease);
     }
 
-
+    // Pomocná metoda pro výpis sousedních vrcholů do konzole
     public void printVerNeiborhood(int vertexIndex)
     {
         List<int> neighbors = VVQuery(vertexIndex);
@@ -355,6 +387,7 @@ public class HalfEdgeMesh
         Debug.Log($"Neighbors of vertex {vertexIndex}: {neighborStr}");
     }
 
+    // Metoda pro převod pozic vrcholů sítě na pole
     public Vector3[] getVertices()
     {
         Vector3[] v = new Vector3[this.vertices.Count];
@@ -367,6 +400,7 @@ public class HalfEdgeMesh
         return v;
     }
 
+    // Metoda pro převod indexů stěn sítě na pole
     public int[] getIndices()
     {
         int[] ind = new int[this.faces.Count * 3];
@@ -385,6 +419,7 @@ public class HalfEdgeMesh
         return ind;
     }
 
+    // Metoda pro rozdělení každého trojúhelníku pomocí nového středového vrcholu
     private void split()
     {
         int originalFaceCount = this.faces.Count;
@@ -416,50 +451,41 @@ public class HalfEdgeMesh
             int p1 = h1.fromVertexIndex;
             int p2 = h2.fromVertexIndex;
 
+            // Středový vrchol vznikne jako průměr vrcholů původního trojúhelníku
             this.vertices.Add(new HalfEdgeVertex(vNew, h02i, false));
             int newVertexIndex = this.vertices.Count - 1;
 
-            //pridani h01
+            // Přidání šesti nových polohran pro tři vznikající trojúhelníky
             this.edges.Add(new HalfEdgeEdge(p1, t0, h02i, h12i, false, 0f));
-            //pridani h12
             this.edges.Add(new HalfEdgeEdge(newVertexIndex, t1, h10i, h01i, false, 0f));
-            //pridani h11
             this.edges.Add(new HalfEdgeEdge(p2, t1, h12i, h22i, false, 0f));
-            //pridani h22
             this.edges.Add(new HalfEdgeEdge(newVertexIndex, t2, h20i, h11i, false, 0f));
-            //pridani h21
             this.edges.Add(new HalfEdgeEdge(p0, t2, h22i, h02i, false, 0f));
-            //pridani h02
             this.edges.Add(new HalfEdgeEdge(newVertexIndex, t0, h00i, h21i, false, 0f));
 
-            h0.nextEdgeIndex = h01i;
-            this.edges[h00i] = h0;
-
-            h1.nextEdgeIndex = h11i;
-            h1.faceIndex = t1;
-            this.edges[h10i] = h1;
-
-            h2.nextEdgeIndex = h21i;
-            h2.faceIndex = t2;
-            this.edges[h20i] = h2;
+            // Úprava původních polohran a přiřazení nových stěn
+            changeNextEdge(h00i, h01i);
+            changeNextEdge(h10i, h11i);
+            changeEdgeFace(h10i, t1);
+            changeNextEdge(h20i, h21i);
+            changeEdgeFace(h20i, t2);
 
             this.faces.Add(new HalfEdgeFace(h10i));
             this.faces.Add(new HalfEdgeFace(h20i));
         }
 
+        // Hraniční vrcholy se navážou na hrany ležící na okraji sítě
         for (int e = 0; e < this.edges.Count; e++)
         {
             if (this.edges[e].twinEdgeIndex == -1)
             {
                 int vIdx = this.edges[e].fromVertexIndex;
-                HalfEdgeVertex v = this.vertices[vIdx];
-                v.halfEdgeIndex = e;
-                this.vertices[vIdx] = v;
+                changeVertexEdge(vIdx, e);
             }
         }
     }
 
-
+    // Metoda pro vyhlazení původních vrcholů sítě
     private void smooth(float creaseWeight, bool nonLinearBoundarySmoothing)
     {
         Vector3[] newPositions = new Vector3[this.vertices.Count];
@@ -479,20 +505,17 @@ public class HalfEdgeMesh
 
             if (isBoundary && neibs.Count >= 2)
             {
-                // Pro hranici: Můžeme interpolovat mezi původní pozicí (fixed) 
-                // a případně 1D vyhlazením podél okraje, nebo nechat fixní.
-                // Zde držíme pevnou pozici jako základ pro uzamčení:
+                // Na hranici se pozice interpoluje mezi původním bodem a vyhlazenou polohou
                 Vector3 fixedPosition = this.vertices[i].position;
                 
-                // Pokud chceš, aby se okraj při creaseWeight < 1 mírně zjemnil 
-                // podle sousedů na hranici (left/right), můžeš spočítat 1D průměr:
+                // Lineární vyhlazení hranice využívá dva krajní sousedy a středový vrchol
                 int leftNeighbor = neibs[0];
                 int rightNeighbor = neibs[neibs.Count - 1];
                 Vector3 boundarySmoothLinear = (1f / 6f) * this.vertices[leftNeighbor].position
                                     + (4f / 6f) * this.vertices[i].position
                                     + (1f / 6f) * this.vertices[rightNeighbor].position;
                 
-                //nelinearni vypocet nove pozice bodu s vyuzitim znalosti vzdalenosti v prostoru
+                // Nelineární vyhlazení zohledňuje vzdálenost sousedů od vrcholu
                 Vector3 leftNeighborPos = this.vertices[leftNeighbor].position;
                 Vector3 rightNeighborPos = this.vertices[rightNeighbor].position;
                 Vector3 vertexPos = this.vertices[i].position;
@@ -509,8 +532,7 @@ public class HalfEdgeMesh
 
                 Vector3 boundarySmoothNonLinear = (weightLeft * leftNeighborPos + weightRight * rightNeighborPos + weightCenter * vertexPos) / totalW;
 
-                // creaseWeight určuje, jak moc se okraj drží (1 = ostrý/fixní, 0 = hladký/vyhlazený)
-                // Nebo pokud to máš obráceně (1 = plně vyhlazený), prohoď parametry v Lerpu.
+                // Váha ostrosti určuje míru zachování původní polohy na hranici
                 if (nonLinearBoundarySmoothing)
                 {
                     newPositions[i] = Vector3.Lerp(boundarySmoothNonLinear, fixedPosition, creaseWeight);
@@ -522,6 +544,7 @@ public class HalfEdgeMesh
             }
             else
             {
+                // Vnitřní vrchol se vyhladí podle všech sousedních vrcholů
                 Vector3 sum = Vector3.zero;
                 for (int j = 0; j < neibs.Count; j++)
                 {
@@ -537,6 +560,7 @@ public class HalfEdgeMesh
 
                 if(creaseNeighbors.Count == 2)
                 {
+                    // Vrchol na ostré hraně se vyhladí pouze podél této hrany
                     Vector3 creaseSmooth = (1f / 6f) * this.vertices[creaseNeighbors[0]].position
                                         + (4f / 6f) * this.vertices[i].position
                                         + (1f / 6f) * this.vertices[creaseNeighbors[1]].position;
@@ -554,7 +578,7 @@ public class HalfEdgeMesh
             }
         }
 
-        // Hromadný přesun pozic
+        // Pozice se aktualizují až po výpočtu všech nových poloh
         for (int i = 0; i < this.vertices.Count; i++)
         {
             if (this.vertices[i].isOriginal)
@@ -566,23 +590,24 @@ public class HalfEdgeMesh
             }
         }
     }
+
+    // Metoda pro převrácení hran a rozdělení hranic podle nastavení
     private void flip(bool divideBorderTriangles)
     {
-        List<HalfEdgeEdge> borderFacesDivideEdges = new List<HalfEdgeEdge>();
-        int alreadyAddedEdgesCount = 0;
-        
-        for(int i = 0; i < this.edges.Count; i++)
+        int originalEdgeCount = this.edges.Count;
+
+        for (int i = 0; i < originalEdgeCount; i++)
         {
             HalfEdgeEdge e = this.edges[i];
 
-            // Pripad, kdy hrana neni puvodni nebo kdyz jsme ji uz flipnuli v jinem trojuhelniku
+            // Nově vytvořené hrany a již zpracované dvojice hran se přeskočí
             if (!e.isOriginal || (e.twinEdgeIndex != -1 && i >= e.twinEdgeIndex)) continue;
 
-            // Pripad, kdy je hrana na borderu a my tyto nechceme dělit
-            if(e.twinEdgeIndex == -1 && !divideBorderTriangles) continue;
+            // Hraniční hrana se přeskočí, pokud je dělení hranic vypnuté
+            if (e.twinEdgeIndex == -1 && !divideBorderTriangles) continue;
 
-            // Pripad, kdy je hrana na borderu a my tyto hrany chceme dělit
-            if(e.twinEdgeIndex == -1 && divideBorderTriangles)
+            // Hraniční hrana se rozdělí přidáním středu a nového trojúhelníku
+            if (e.twinEdgeIndex == -1 && divideBorderTriangles)
             {
                 int e0Index = i;
                 int e1Index = this.edges[i].nextEdgeIndex;
@@ -593,49 +618,37 @@ public class HalfEdgeMesh
                 Vector3 newBorderVCord = (borderVCord0 + borderVCord1) / 2;
                 int middleVertexIndex = this.edges[e2Index].fromVertexIndex;
 
-                // Indexy novych hran tak jak je dano v dokumentaci
-                int ne0Index = alreadyAddedEdgesCount + this.edges.Count + 0;
-                int ne1Index = alreadyAddedEdgesCount + this.edges.Count + 1;
-                int ne2Index = alreadyAddedEdgesCount + this.edges.Count + 2;
-                
-                // Index noveho bodu tak jak je dano v dokumentaci
-                int nvIndex = this.vertices.Count;
+                // Indexy nových polohran navazují na konec seznamu
+                int ne0Index = this.edges.Count + 0;
+                int ne1Index = this.edges.Count + 1;
+                int ne2Index = this.edges.Count + 2;
 
-                // Index noveho trojuhelniku tak jak je dano v dokumentaci
+                // Určení indexů nového vrcholu a stěny
+                int nvIndex = this.vertices.Count;
                 int nfIndex = this.faces.Count;
                 int ofIndex = this.edges[e2Index].faceIndex;
 
+                // Přidání nového trojúhelníku, vrcholu a jeho polohran
                 this.faces.Add(new HalfEdgeFace(ne2Index));
                 this.vertices.Add(new HalfEdgeVertex(newBorderVCord, ne0Index, false));
-                
-                // Přidání hran tvořících vnější i vnitřní obrys hraničního rozdělení
-                borderFacesDivideEdges.Add(new HalfEdgeEdge(nvIndex, nfIndex, e1Index, -1, false, 0f));
-                borderFacesDivideEdges.Add(new HalfEdgeEdge(nvIndex, ofIndex, e2Index, ne2Index, false, 0f));
-                borderFacesDivideEdges.Add(new HalfEdgeEdge(middleVertexIndex, nfIndex, ne0Index, ne1Index, false, 0f));
 
-                // Douprava dalsich nalezitosti
-                HalfEdgeFace of = this.faces[ofIndex];
-                of.edgeIndex = e2Index;
-                this.faces[ofIndex] = of;
+                this.edges.Add(new HalfEdgeEdge(nvIndex, nfIndex, e1Index, -1, false, 0f));
+                this.edges.Add(new HalfEdgeEdge(nvIndex, ofIndex, e2Index, ne2Index, false, 0f));
+                this.edges.Add(new HalfEdgeEdge(middleVertexIndex, nfIndex, ne0Index, ne1Index, false, 0f));
 
-                HalfEdgeEdge e1 = this.edges[e1Index];
-                e1.faceIndex = nfIndex;        // Přesun hrany do nové stěny
-                e1.nextEdgeIndex = ne2Index;   // Napojení na novou vnitřní dělící hranu
-                this.edges[e1Index] = e1;
+                // Aktualizace původní stěny a propojení jejích polohran
+                changeFaceEdge(ofIndex, e2Index);
+                changeEdgeFace(e1Index, nfIndex);
+                changeNextEdge(e1Index, ne2Index);
+                changeNextEdge(e0Index, ne1Index);
 
-                HalfEdgeEdge e0 = this.edges[e0Index];
-                e0.nextEdgeIndex = ne1Index;
-                this.edges[e0Index] = e0;
-
-                alreadyAddedEdgesCount += 3;
                 continue;
             }
-            // Pripad, kdy hrana neni na borderu a my ji chceme flipnout
-            
-            // Hrana má váhu (nelze ji flipnout)
-            if(e.creaseWeight > 0)
+
+            // Hrana s nenulovou ostrostí se rozdělí a její ostrost se přenese na nové hrany
+            if (e.creaseWeight > 0)
             {
-                // indexy existujících hran
+                // Určení polohran obou sousedních trojúhelníků
                 int abi = i;
                 int bai = this.edges[abi].twinEdgeIndex;
                 int bdi = this.edges[abi].nextEdgeIndex;
@@ -643,13 +656,13 @@ public class HalfEdgeMesh
                 int aci = this.edges[bai].nextEdgeIndex;
                 int cbi = this.edges[aci].nextEdgeIndex;
 
-                // indexy existujících bodů
+                // Určení vrcholů obou sousedních trojúhelníků
                 int ai = this.edges[abi].fromVertexIndex;
                 int bi = this.edges[bai].fromVertexIndex;
                 int ci = this.edges[cbi].fromVertexIndex;
                 int di = this.edges[dai].fromVertexIndex;
 
-                // indexy nových hra
+                // Rezervace indexů šesti nových polohran
                 int mdi = this.edges.Count + 0;
                 int dmi = this.edges.Count + 1;
                 int mbi = this.edges.Count + 2;
@@ -657,36 +670,34 @@ public class HalfEdgeMesh
                 int mci = this.edges.Count + 4;
                 int cmi = this.edges.Count + 5;
 
-                // index nového vrcholu
+                // Nový vrchol leží uprostřed rozdělované hrany
                 int mi = this.vertices.Count;
                 Vector3 nvp = (this.vertices[ai].position + this.vertices[bi].position) / 2;
 
-                // index existujících i nových trojuhelníků
+                // Určení původních a nových stěn
                 int ot0i = this.edges[dai].faceIndex;
                 int ot1i = this.edges[aci].faceIndex;
                 int nt0i = this.faces.Count + 0;
                 int nt1i = this.faces.Count + 1;
 
-                // Ostrost hrany, kterou upravujeme
+                // Nové hrany navazující na původní ostrou hranu zachovají její váhu
                 float ec = this.edges[abi].creaseWeight;
 
-                // přidání nových hran
-                //fromVertexIndex, faceIndex, nextEdgeIndex, twinEdgeIndex, isOriginal, creaseWeight
-                this.edges.Add(new HalfEdgeEdge(mi,ot0i,dai,dmi,false,0f));
-                this.edges.Add(new HalfEdgeEdge(di,nt0i,mbi,mdi,false,0f));
-                this.edges.Add(new HalfEdgeEdge(mi,nt0i,bdi,bmi,false,ec));
-                this.edges.Add(new HalfEdgeEdge(bi,nt1i,mci,mbi,false,ec));
-                this.edges.Add(new HalfEdgeEdge(mi,nt1i,cbi,cmi,false,0f));
-                this.edges.Add(new HalfEdgeEdge(ci,ot1i,bai,mci,false,0f));
+                // Přidání polohran upravených a nově vytvořených trojúhelníků
+                this.edges.Add(new HalfEdgeEdge(mi, ot0i, dai, dmi, false, 0f));
+                this.edges.Add(new HalfEdgeEdge(di, nt0i, mbi, mdi, false, 0f));
+                this.edges.Add(new HalfEdgeEdge(mi, nt0i, bdi, bmi, false, ec));
+                this.edges.Add(new HalfEdgeEdge(bi, nt1i, mci, mbi, false, ec));
+                this.edges.Add(new HalfEdgeEdge(mi, nt1i, cbi, cmi, false, 0f));
+                this.edges.Add(new HalfEdgeEdge(ci, ot1i, bai, mci, false, 0f));
 
-                // přidání nového vrchlu
-                this.vertices.Add(new HalfEdgeVertex(nvp,mbi,false));
+                // Přidání středového vrcholu a dvou nových stěn
+                this.vertices.Add(new HalfEdgeVertex(nvp, mbi, false));
 
-                // přidání nových trojuhelníků
                 this.faces.Add(new HalfEdgeFace(mbi));
                 this.faces.Add(new HalfEdgeFace(bmi));
 
-                // uprava topologie
+                // Aktualizace návazností polohran a příslušnosti ke stěnám
                 changeNextEdge(bdi, dmi);
                 changeNextEdge(abi, mdi);
                 changeNextEdge(aci, cmi);
@@ -695,10 +706,13 @@ public class HalfEdgeMesh
                 changeFaceEdge(ot0i, abi);
                 changeFaceEdge(ot1i, bai);
 
-                changeEdgeFace(bdi, nt0i); 
+                changeEdgeFace(bdi, nt0i);
                 changeEdgeFace(cbi, nt1i);
 
                 changeEdgeVertex(bai, mi);
+
+                // Referenční hrana vrcholu bi musí stále z tohoto vrcholu vycházet
+                changeVertexEdge(bi, bmi);
             }
             else
             {
@@ -712,11 +726,11 @@ public class HalfEdgeMesh
                 int oldV0 = e.fromVertexIndex;
                 int oldV1 = this.edges[f10i].fromVertexIndex;
 
-                // new f00/f10 from vertex index
+                // Nové počáteční vrcholy převrácené dvojice polohran
                 int nf00fvi = this.edges[f12i].fromVertexIndex;
                 int nf10fvi = this.edges[f02i].fromVertexIndex;
-                
-                // new faces
+
+                // Stěny zůstávají zachovány, mění se jejich hraniční polohrany
                 int nf00fi = this.edges[f00i].faceIndex;
                 int nf10fi = this.edges[f10i].faceIndex;
 
@@ -725,57 +739,35 @@ public class HalfEdgeMesh
                 this.edges[f00i] = nf00;
                 this.edges[f10i] = nf10;
 
-                // edges adjustment
-                HalfEdgeEdge f02 = this.edges[f02i];
-                f02.nextEdgeIndex = f11i;
-                this.edges[f02i] = f02;
+                // Přepojení polohran v obou sousedních trojúhelnících
+                changeNextEdge(f02i, f11i);
+                changeNextEdge(f11i, f00i);
+                changeEdgeFace(f11i, nf00fi);
+                changeNextEdge(f12i, f01i);
+                changeNextEdge(f01i, f10i);
+                changeEdgeFace(f01i, nf10fi);
 
-                HalfEdgeEdge f11 = this.edges[f11i];
-                f11.nextEdgeIndex = f00i;
-                f11.faceIndex = nf00fi;
-                this.edges[f11i] = f11;
+                // Aktualizace referenčních polohran stěn a vrcholů
+                changeFaceEdge(nf00fi, f00i);
+                changeFaceEdge(nf10fi, f10i);
 
-                HalfEdgeEdge f12 = this.edges[f12i];
-                f12.nextEdgeIndex = f01i;
-                this.edges[f12i] = f12;
-
-                HalfEdgeEdge f01 = this.edges[f01i];
-                f01.nextEdgeIndex = f10i;
-                f01.faceIndex = nf10fi;
-                this.edges[f01i] = f01;
-
-                // Aktualizace referenčních hran pro stěny
-                this.faces[nf00fi] = new HalfEdgeFace(f00i);
-                this.faces[nf10fi] = new HalfEdgeFace(f10i);
-
-                // Pojistka pro vrcholy: aby neukazovaly na hranu, která už z nich nevychází
-                HalfEdgeVertex v0 = this.vertices[oldV0];
-                v0.halfEdgeIndex = f11i;
-                this.vertices[oldV0] = v0;
-
-                HalfEdgeVertex v1 = this.vertices[oldV1];
-                v1.halfEdgeIndex = f01i;
-                this.vertices[oldV1] = v1;
+                changeVertexEdge(oldV0, f11i);
+                changeVertexEdge(oldV1, f01i);
             }
-
         }
-        
-        this.edges.AddRange(borderFacesDivideEdges);
 
-        // KLIČOVÁ POJISTKA: Znovunavázání okrajových vrcholů na správné vnější hrany,
-        // aby metoda smooth() v další iteraci správně rozpoznala isBoundary = true.
+        // Hraniční vrcholy se znovu navážou na polohrany ležící na okraji sítě
         for (int eIdx = 0; eIdx < this.edges.Count; eIdx++)
         {
             if (this.edges[eIdx].twinEdgeIndex == -1)
             {
                 int vIdx = this.edges[eIdx].fromVertexIndex;
-                HalfEdgeVertex v = this.vertices[vIdx];
-                v.halfEdgeIndex = eIdx;
-                this.vertices[vIdx] = v;
+                changeVertexEdge(vIdx, eIdx);
             }
         }
     }
 
+    // Metoda pro označení všech vrcholů a polohran jako původních pro další iteraci
     private void resetOriginalFlags()
     {
         for(int i = 0; i < this.edges.Count; i++)
@@ -793,6 +785,7 @@ public class HalfEdgeMesh
         }
     }
 
+    // Metoda pro spuštění jedné iterace sqrt(3) subdivize
     public void subDivide(bool divideBorderTriangles, float creaseWeight, bool nonLinearBoundarySmoothing)
     {
         this.smooth(creaseWeight, nonLinearBoundarySmoothing);
