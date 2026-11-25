@@ -384,7 +384,6 @@ public class HalfEdgeMesh
     {
         List<int> neighbors = VVQuery(vertexIndex);
         string neighborStr = string.Join(", ", neighbors);
-        Debug.Log($"Neighbors of vertex {vertexIndex}: {neighborStr}");
     }
 
     // Metoda pro převod pozic vrcholů sítě na pole

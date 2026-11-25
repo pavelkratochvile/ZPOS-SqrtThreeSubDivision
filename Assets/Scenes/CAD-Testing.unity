@@ -867,9 +867,9 @@ MonoBehaviour:
   divideBorderTriangles: 0
   borderCreaseWeight: 0
   nonLinearBoundarySmoothing: 0
-  dihedralAngleBasedSmooting: 0
-  minDihedralAngle: 0
-  maxDihedralAngle: 0
+  dihedralAngleBasedSmooting: 1
+  minDihedralAngle: 35
+  maxDihedralAngle: 75
 --- !u!65 &1463077855
 BoxCollider:
   m_ObjectHideFlags: 0
